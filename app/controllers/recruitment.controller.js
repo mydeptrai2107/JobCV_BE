@@ -113,34 +113,74 @@ exports.getRecruitmentById = async (req, res) => {
 
 exports.getRecruitmentByName = async (req, res) => {
   try {
-    const recruitmentName = req.params.name;
+    const searchTerm = req.params.name;  // Lấy tên tìm kiếm từ tham số request
 
-    // Tạo biểu thức chính quy từ tên tuyển dụng nhập vào
-    const regex = new RegExp(recruitmentName, "i");
+    if (!searchTerm) {
+      return res.status(400).send({ message: "Search term is required." });
+    }
 
-    // Sử dụng biểu thức chính quy trong truy vấn tìm kiếm
-    const recruitments = await Recruitment.find({ title: regex, statusShow : true,  });
+    // Tạo biểu thức chính quy từ tên tìm kiếm (để tìm kiếm gần đúng)
+    const regex = new RegExp(searchTerm, "i");
 
-    if (recruitments.length === 0) {
+    // Truy vấn tìm kiếm các tuyển dụng theo tiêu đề (title) với regex
+    const recruitmentsByTitle = await Recruitment.find({
+      title: regex,  // Tìm kiếm gần đúng trong trường title
+      statusShow: true
+    });
+
+    // Truy vấn tìm kiếm các công ty theo tên công ty với regex
+    const companies = await Company.find({
+      name: regex  // Tìm kiếm gần đúng trong trường name của công ty
+    });
+
+    // Lấy tất cả company_id từ kết quả tìm kiếm công ty
+    const companyIds = companies.map(company => company._id);
+
+    // Truy vấn các tuyển dụng có company_id trong danh sách công ty tìm được
+    const recruitmentsByCompany = await Recruitment.find({
+      company_id: { $in: companyIds },  // Lọc theo company_id
+      statusShow: true
+    });
+
+    // Gộp kết quả từ cả 2 truy vấn (theo tên tuyển dụng và tên công ty)
+    const combinedRecruitments = [
+      ...recruitmentsByTitle,
+      ...recruitmentsByCompany
+    ];
+
+    // Lọc trùng (nếu có) bằng cách sử dụng id
+    const uniqueRecruitments = Array.from(
+      new Map(combinedRecruitments.map((item) => [item.id, item])).values()
+    );
+
+    // Nếu không có kết quả nào, trả về thông báo không tìm thấy
+    if (uniqueRecruitments.length === 0) {
       return res.status(404).send({ message: "Recruitment not found" });
     }
 
+    // Thêm số lượt thích vào từng tuyển dụng
     const recruitmentList = await Promise.all(
-        recruitments.map(async (recruitment) => {
-            const totalLike = await LikeRecruitment.countDocuments({ recruitment_id: recruitment.id, is_like: true, is_active: true });
-            const withItems = {
-                recruitment,
-                totalLike,
-            };
-            return withItems;
-        })
+      uniqueRecruitments.map(async (recruitment) => {
+        const totalLike = await LikeRecruitment.countDocuments({
+          recruitment_id: recruitment.id,
+          is_like: true,
+          is_active: true
+        });
+
+        return {
+          recruitment,
+          totalLike
+        };
+      })
     );
 
     res.status(200).send(recruitmentList);
   } catch (error) {
+    console.error('Error in getRecruitmentByName:', error);  // Log lỗi
     res.status(500).json({ message: 'Failed to search recruitments.', error: error.message });
   }
 };
+
 
 
 exports.updateRecruitment = async (req, res) => {
